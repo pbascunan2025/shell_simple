@@ -6,6 +6,14 @@
 
 #define MAX_LINEAS 1024 //Tamaño maximo del buffer para la linea de entrada
 #define MAX_TOKENS 12 //Tamaño maximo de tokens perimitidos por comando
+#define MAX_JOBS 64 //Cantidad maxima de procesos 
+
+typedef struct {
+    pid_t pid;
+    int activo; // 1 activo, 0 si ya termino
+} Job;
+
+Job jobs[MAX_JOBS]; //Arreglo de jobs
 
 /**
  * Muestra en la pantalla el prompt de la Shell.
@@ -103,6 +111,11 @@ static void ejecutar_comando(char *tokens[]) {
 
 
 
+    //===================//
+    //    Comando cd     //
+    //===================//
+
+
     // Comando interno "cd".
     static void comando_cd(char *tokens[]) {
         const char *directorio;
@@ -124,6 +137,44 @@ static void ejecutar_comando(char *tokens[]) {
         }
 
     }
+
+
+    //====================//
+    //    Comando pmon    //
+    //====================//
+
+
+    void ejecutar_pmon_basico() {
+    printf("%-7s | %-20s\n", "PID", "COMANDO");
+    printf("--------+----------------------\n");
+
+    for (int i = 0; i < MAX_JOBS; i++) {
+        // Solo revisamos los jobs que la shell registró como activos
+        if (jobs[i].activo == 1) {
+            char path[256];
+            // Construimos la ruta
+            snprintf(path, sizeof(path), "/proc/%d/stat", jobs[i].pid);
+            
+            FILE *f_stat = fopen(path, "r");
+            if (f_stat != NULL) {
+                int pid_leido;
+                char comando[256];
+                
+                // Usamos una expresión regular básica en fscanf para leer hasta el paréntesis de cierre
+                if (fscanf(f_stat, "%d (%255[^)])", &pid_leido, comando) == 2) {
+                    // Imprimimos los datos
+                    printf("%-7d | %-20s\n", pid_leido, comando);
+                }
+                
+                fclose(f_stat);
+            } else {
+                // Si fopen falla 
+                // Lo marcamos como inactivo para no volver a leerlo
+                jobs[i].activo = 0;
+            }
+        }
+    }
+}
 
 
 
@@ -166,9 +217,18 @@ int main(void) {
         }
 
 
+        for (int i = 0; i < MAX_JOBS; i++) jobs[i].activo = 0;
+    
+            //Dato falso de prueba
+            jobs[0].pid = 1;
+            jobs[0].activo = 1;
+
         //Comando interno "cd".
         if (strcmp(tokens[0], "cd") == 0) {
             comando_cd(tokens);
+            continue;
+        } else if (strcmp(tokens[0], "pmon") == 0) {
+            ejecutar_pmon_basico();
             continue;
         }
 
