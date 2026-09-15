@@ -3,6 +3,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <fcntl.h>
 
 #define MAX_LINEAS 1024 //Tamaño maximo del buffer para la linea de entrada
 #define MAX_TOKENS 12 //Tamaño maximo de tokens perimitidos por comando
@@ -182,7 +183,58 @@ static void ejecutar_comando(char *tokens[]) {
 
     //CODIGO DEL PROCESO HIJO
     if (pid == 0) {
+        
+        int i = 0;
+        int idxCorte = -1;
 
+        while (tokens[i]!=NULL){
+                if (strcmp(tokens[i], ">") == 0 ||
+                strcmp(tokens[i], ">>") == 0 ||
+                strcmp(tokens[i], "<") == 0) {
+
+                //se guarda el primer indice donde se encuentra una redireccion
+                if (idxCorte ==-1){
+                    idxCorte = i;
+                }
+
+                if(strcmp(tokens[i], ">") == 0) {
+                    //redireccion de salida
+                    int fd = open(tokens[i+1], O_WRONLY | O_CREAT | O_TRUNC, 0664);
+                    if (fd < 0) {
+                        perror("open >");
+                        _exit(1);
+                    }
+                    dup2(fd, STDOUT_FILENO);
+                    close(fd);
+                }
+                else if (strcmp(tokens[i], ">>") == 0) {
+                    //redireccion de salida (append)
+                    int fd = open(tokens[i+1], O_WRONLY | O_CREAT | O_APPEND, 0664);
+                    if (fd < 0) {
+                        perror("open >>");
+                        _exit(1);
+                    }
+                    dup2(fd, STDOUT_FILENO);
+                    close(fd);
+                }
+                else if (strcmp(tokens[i], "<") == 0) {
+                    //redireccion de entrada
+                    int fd = open(tokens[i+1], O_RDONLY);
+                    if (fd < 0){
+                        perror("open <");
+                        _exit(1);
+                    }
+                    dup2(fd, STDIN_FILENO);
+                    close(fd);
+                }
+            }
+            i++;
+        }
+
+        //si se encuentra una redireccion, se corta el arreglo
+        if(idxCorte !=-1) {
+            tokens[idxCorte] = NULL;
+        }
         //reemplaza la imagen del proceso hijo por la del binario indicado en tokens[0].
         execvp(tokens[0], tokens);
 
