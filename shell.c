@@ -101,6 +101,36 @@ static void ejecutar_comando(char *tokens[]) {
     waitpid(pid, &status, 0);
 }
 
+
+
+    // Comando interno "cd".
+    static void comando_cd(char *tokens[]) {
+        const char *directorio;
+
+        //Si no se especifica un directorio, se cambia al directorio home.
+        if (tokens[1] == NULL) {
+            directorio = getenv("HOME");
+            if (directorio == NULL) {
+                fprintf(stderr, "cd: No se pudo acceder a directorio HOME\n");
+                return;
+            }
+        } else {
+            directorio = tokens[1];
+        }
+
+        if (chdir(directorio) != 0) {
+            printf("cd: No se encontró el directorio '%s'\n", directorio);
+        }
+
+    }
+
+
+
+
+
+
+
+
 /**
  * Punto de entrada princinpal del interprete de comandos.
  */
@@ -129,9 +159,16 @@ int main(void) {
             continue;        
         }
 
-        //4. Procesa los comandos internos.
+        //Comando interno "exit" para salir de la Shell.
         if (strcmp(tokens[0], "exit") == 0) {
-            break; //Finaliza el Shell si el usuario escribe "exit".
+            break;
+        }
+
+
+        //Comando interno "cd".
+        if (strcmp(tokens[0], "cd") == 0) {
+            comando_cd(tokens);
+            continue;
         }
 
         //5. Ejecuta los comandos externos.
