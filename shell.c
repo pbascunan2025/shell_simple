@@ -20,8 +20,8 @@ static void imprimir_prompt(void) {
         strcpy(cwd, "?");
     }
 
-    //Imprime el prompt: "Shell:/ruta/actual$ "
-    printf("Shell:%s$ ", cwd);
+    //Imprime el prompt con la ruta actual en color celeste.
+    printf("Shell:\033[38;5;117m%s\033[0m$ ", cwd);
 
     //Fuerza el vacciado del buffer de salida para asegurar que el prompt
     //se dibuje inmediatamente en la terminal sin esperar un "\n"
@@ -118,8 +118,9 @@ static void ejecutar_comando(char *tokens[]) {
             directorio = tokens[1];
         }
 
+        // Imprime error en color rojo si no se encuentra el directorio.
         if (chdir(directorio) != 0) {
-            printf("cd: No se encontró el directorio '%s'\n", directorio);
+            printf("\033[91mcd: No se encontró el directorio\033[0m '%s'\n", directorio); 
         }
 
     }
