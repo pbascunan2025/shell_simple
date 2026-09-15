@@ -73,6 +73,97 @@ static int parse_line(char *line, char *tokens[], int max_tokens) {
 }
 
 /**
+ * Comando Pipes
+ * este divide la cadena original en comandos separados por el carácter "|"
+ */
+static int parse_pipes(char *line, char *comandos[], int max_comandos) {
+    int n_comandos = 0;
+    char *saveptr; //Puntero interno que strtok_r usa para saber dónde quedó
+
+    //Extraemos el primer trozo de comandos separados por "|"
+    char *tok = strtok_r(line, "|", &saveptr);
+
+    //Iteramos mientras siga encontrando el delimitador "|"
+    while (tok != NULL && n_comandos < max_comandos - 1) {
+        comandos[n_comandos++] = tok;
+        
+        //Aca strtok_r buscara desde donde se quedó la última vez
+        tok = strtok_r(NULL, "|", &saveptr);
+    }
+
+    //Cerramos el arreglo con un NULL por seguridad
+    comandos[n_comandos] = NULL;
+
+    return n_comandos;
+}
+
+static void ejecutar_pipes(char *comandos_pipe[], int num_comandos) {
+    int in_fd = 0; //Lee la entrada estandar
+    int fd[2];     //Arreglo para el pipe
+    pid_t pids[MAX_TOKENS];
+
+    for (int i = 0; i < num_comandos; i++) {
+        //Separamos el comando por espacios para obtener sus argumentos
+        char *tokens[MAX_TOKENS];
+        int ntokens = parse_line(comandos_pipe[i], tokens, MAX_TOKENS);
+        
+        if (ntokens == 0) continue;
+
+        //Si no es el último comando, se crea un pipe
+        if (i < num_comandos - 1) {
+            if (pipe(fd) < 0) {
+                perror("pipe");
+                return;
+            }
+        }
+
+        pids[i] = fork();
+
+        if (pids[i] < 0) {
+            perror("fork");
+            return;
+        }
+
+        //Proceso de hijo
+        if (pids[i] == 0) { 
+            
+            //Redirigir la ENTRADA
+            if (in_fd != 0) {
+                dup2(in_fd, STDIN_FILENO); //STDIN ahora es el extremo de lectura del pipe anterior
+                close(in_fd);
+            }
+
+            //Redirigir la SALIDA (si no es el último comando)
+            if (i < num_comandos - 1) {
+                dup2(fd[1], STDOUT_FILENO); //STDOUT ahora apunta al extremo de escritura del pipe actual
+                close(fd[0]);               //El hijo no lee de su propio pipe, lo cerramos
+                close(fd[1]);
+            }
+
+            // Ejecutamos el comando
+            execvp(tokens[0], tokens);
+            perror(tokens[0]);
+            _exit(127);
+        } else {          
+            if (in_fd != 0) {
+                close(in_fd); //El padre ya le pasó este in_fd al hijo
+            }
+
+            if (i < num_comandos - 1) {
+                close(fd[1]);  //Cerramos la entrada
+                in_fd = fd[0]; 
+            }
+        }
+    }
+
+    //Esperar a todos los hijos
+    for (int i = 0; i < num_comandos; i++) {
+        int status;
+        waitpid(pids[i], &status, 0); 
+    }
+}
+
+/**
  * Crea proceso hijo para ejecutar un comando externo mediante execvp.
  * El proceso padre espera a que el hijo termine su ejecucion antes de continuar.
  * 
@@ -203,37 +294,42 @@ int main(void) {
             break; //Sale del bucle y finaliza la Shell.
         }
 
+        //Arreglo para guardar los comandos separados por "|"
+        char *comandos_pipe[MAX_TOKENS]; 
+        int num_comandos = parse_pipes(linea, comandos_pipe, MAX_TOKENS);
+
+        if (num_comandos == 0) {
+            continue;
+        }
+
+        for(int i = 0; i < num_comandos; i++) {
+            printf("Comando %d encontrado: [%s]\n", i, comandos_pipe[i]);
+        }
+
         //3. Parsea la linea ingresada separandola en tokens.
-        int ntokens = parse_line(linea, tokens, MAX_TOKENS);
+        if (num_comandos == 1) {
+            int ntokens = parse_line(comandos_pipe[0], tokens, MAX_TOKENS);
+            //Si la linea esta vacia, se ignora.
+            if (ntokens == 0) {
+                continue;        
+            }
 
-        //Si la linea esta vacia, se ignora.
-        if (ntokens == 0) {
-            continue;        
+            if (strcmp(tokens[0], "exit") == 0) {
+                break;
+            } else if (strcmp(tokens[0], "cd") == 0) {
+                comando_cd(tokens);
+                continue;
+            } else if (strcmp(tokens[0], "pmon") == 0) {
+                ejecutar_pmon_basico();
+                continue;
+            }
+
+            ejecutar_comando(tokens);
+            
+        } else {
+            //Si hay más de 1 comando (pipes), llamamos a la función
+            ejecutar_pipes(comandos_pipe, num_comandos);
         }
-
-        //Comando interno "exit" para salir de la Shell.
-        if (strcmp(tokens[0], "exit") == 0) {
-            break;
-        }
-
-
-        for (int i = 0; i < MAX_JOBS; i++) jobs[i].activo = 0;
-    
-            //Dato falso de prueba
-            jobs[0].pid = 1;
-            jobs[0].activo = 1;
-
-        //Comando interno "cd".
-        if (strcmp(tokens[0], "cd") == 0) {
-            comando_cd(tokens);
-            continue;
-        } else if (strcmp(tokens[0], "pmon") == 0) {
-            ejecutar_pmon_basico();
-            continue;
-        }
-
-        //5. Ejecuta los comandos externos.
-        ejecutar_comando(tokens);
     }
 
     return 0;
