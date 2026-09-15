@@ -213,7 +213,11 @@ int main(void) {
 
         //Comando interno "exit" para salir de la Shell.
         if (strcmp(tokens[0], "exit") == 0) {
-            break;
+            int exitCode = 0;
+            if (tokens[1]!=NULL) {
+                exitCode = atoi(tokens[1]);
+            }
+            exit(exitCode);
         }
 
 
