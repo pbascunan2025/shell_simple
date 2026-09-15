@@ -301,7 +301,6 @@ int main(void) {
         if (num_comandos == 0) {
             continue;
         }
-
         for(int i = 0; i < num_comandos; i++) {
             printf("Comando %d encontrado: [%s]\n", i, comandos_pipe[i]);
         }
@@ -315,7 +314,11 @@ int main(void) {
             }
 
             if (strcmp(tokens[0], "exit") == 0) {
-                break;
+              int exitCode = 0;
+              if (tokens[1]!=NULL) {
+                  exitCode = atoi(tokens[1]);
+              }
+              exit(exitCode);
             } else if (strcmp(tokens[0], "cd") == 0) {
                 comando_cd(tokens);
                 continue;
