@@ -4,17 +4,21 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <signal.h>
 
 #define MAX_LINEAS 1024 //Tamaño maximo del buffer para la linea de entrada
 #define MAX_TOKENS 12 //Tamaño maximo de tokens perimitidos por comando
 #define MAX_JOBS 64 //Cantidad maxima de procesos 
 
+
+// Estructura para los jobs
 typedef struct {
     pid_t pid;
-    int activo; // 1 activo, 0 si ya termino
+    int activo;
+    char comando[MAX_LINEAS];
 } Job;
 
-Job jobs[MAX_JOBS]; //Arreglo de jobs
+
 
 /**
  * Muestra en la pantalla el prompt de la Shell.
@@ -98,6 +102,8 @@ static int parse_pipes(char *line, char *comandos[], int max_comandos) {
     return n_comandos;
 }
 
+static void registrar_job(pid_t pid, const char *comando);
+
 static void ejecutar_pipes(char *comandos_pipe[], int num_comandos) {
     int in_fd = 0; //Lee la entrada estandar
     int fd[2];     //Arreglo para el pipe
@@ -170,7 +176,7 @@ static void ejecutar_pipes(char *comandos_pipe[], int num_comandos) {
  * 
  * @param tokens Arreglo de cadenas terminado en NULL. 
  */
-static void ejecutar_comando(char *tokens[]) {
+static void ejecutar_comando(char *tokens[], int background, const char *comando) {
 
     //Clona el proceso actual creando un proceso hijo.
     pid_t pid = fork();
@@ -246,6 +252,11 @@ static void ejecutar_comando(char *tokens[]) {
     }
 
     //CODIGO DEL PROCESO PADRE
+    if (background) {
+        registrar_job(pid, comando);
+        return;
+    }
+
     int status;
 
     //Bloquea la ejecucion del padre hasta que el hijo termine.
@@ -280,6 +291,80 @@ static void ejecutar_comando(char *tokens[]) {
         }
 
     }
+
+
+
+
+
+//==================//
+//       Jobs       //
+//==================//
+
+
+
+Job jobs[MAX_JOBS]; //Arreglo de jobs
+static volatile sig_atomic_t hay_hijos_terminados = 0;
+
+
+// Manejador de la señal SIGCHLD para indicar que hay hijos terminados.
+static void manejar_sigchld(int signal_number) {
+    (void)signal_number;
+    hay_hijos_terminados = 1;
+}
+
+
+// Registra un nuevo job en el arreglo de jobs.
+static void registrar_job(pid_t pid, const char *comando) {
+    for (int i = 0; i < MAX_JOBS; i++) {
+        if (!jobs[i].activo) {
+            jobs[i].pid = pid;
+            jobs[i].activo = 1;
+            snprintf(jobs[i].comando, sizeof(jobs[i].comando), "%s", comando);
+            printf("[%d] %d\n", i + 1, pid);
+            return;
+        }
+    }
+
+    fprintf(stderr, "jobs: se alcanzo el limite de %d procesos\n", MAX_JOBS);
+}
+
+
+// Recolecta los jobs terminados y los elimina del arreglo de jobs.
+static void recolectar_jobs(void) {
+    int status;
+    pid_t pid;
+
+    if (!hay_hijos_terminados) {
+        return;
+    }
+
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        for (int i = 0; i < MAX_JOBS; i++) {
+            if (jobs[i].activo && jobs[i].pid == pid) {
+                printf("[%d]+ Done %s\n", i + 1, jobs[i].comando);
+                jobs[i].activo = 0;
+                break;
+            }
+        }
+    }
+
+    hay_hijos_terminados = 0;
+}
+
+
+// Escribe en pantalla la lista de jobs activos.
+static void listar_jobs(void) {
+    recolectar_jobs();
+
+    for (int i = 0; i < MAX_JOBS; i++) {
+        if (jobs[i].activo) {
+            printf("[%d] Ejecutando %d %s\n", i + 1, jobs[i].pid,
+                   jobs[i].comando);
+        }
+    }
+}
+
+
 
 
     //====================//
@@ -332,9 +417,18 @@ static void ejecutar_comando(char *tokens[]) {
 int main(void) {
     char linea[MAX_LINEAS];
     char *tokens[MAX_TOKENS];
+    struct sigaction sigchld_action;
+
+    memset(&sigchld_action, 0, sizeof(sigchld_action));
+    sigchld_action.sa_handler = manejar_sigchld;
+    sigemptyset(&sigchld_action.sa_mask);
+    sigchld_action.sa_flags = SA_RESTART;
+    sigaction(SIGCHLD, &sigchld_action, NULL);
 
     //Bucle principal de ejecucion de la Shell.
     while (1) {
+
+        recolectar_jobs();
 
         //1. Muestra el prompt.
         imprimir_prompt();
@@ -353,9 +447,11 @@ int main(void) {
         if (num_comandos == 0) {
             continue;
         }
-        for(int i = 0; i < num_comandos; i++) {
-            printf("Comando %d encontrado: [%s]\n", i, comandos_pipe[i]);
-        }
+
+        
+        //for(int i = 0; i < num_comandos; i++) {
+        //    printf("Comando %d encontrado: [%s]\n", i, comandos_pipe[i]);
+        //}
 
         //3. Parsea la linea ingresada separandola en tokens.
         if (num_comandos == 1) {
@@ -363,6 +459,15 @@ int main(void) {
             //Si la linea esta vacia, se ignora.
             if (ntokens == 0) {
                 continue;        
+            }
+
+            int background = 0;
+            if (strcmp(tokens[ntokens - 1], "&") == 0) {
+                background = 1;
+                tokens[--ntokens] = NULL;
+                if (ntokens == 0) {
+                    continue;
+                }
             }
 
             if (strcmp(tokens[0], "exit") == 0) {
@@ -374,12 +479,15 @@ int main(void) {
             } else if (strcmp(tokens[0], "cd") == 0) {
                 comando_cd(tokens);
                 continue;
+            } else if (strcmp(tokens[0], "jobs") == 0) {
+                listar_jobs();
+                continue;
             } else if (strcmp(tokens[0], "pmon") == 0) {
                 ejecutar_pmon_basico();
                 continue;
             }
 
-            ejecutar_comando(tokens);
+            ejecutar_comando(tokens, background, comandos_pipe[0]);
             
         } else {
             //Si hay más de 1 comando (pipes), llamamos a la función
