@@ -26,8 +26,10 @@ void ejecutar_comando(char *tokens[], int background, const char *comando) {
     //CODIGO DEL PROCESO HIJO
     if (pid == 0) {
 
-        // Struct para restablecer las señales SIGINT y SIGQUIT a su comportamiento predeterminado
-        if (!background) {
+        if (background) {
+            // Separa el job de background del grupo de procesos del terminal.
+            setpgid(0, 0);
+        } else {
             struct sigaction sa_default;
             memset(&sa_default, 0, sizeof(sa_default));
             sa_default.sa_handler = SIG_DFL;
