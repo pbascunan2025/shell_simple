@@ -25,6 +25,18 @@ void ejecutar_comando(char *tokens[], int background, const char *comando) {
 
     //CODIGO DEL PROCESO HIJO
     if (pid == 0) {
+
+        // Struct para restablecer las señales SIGINT y SIGQUIT a su comportamiento predeterminado
+        if (!background) {
+            struct sigaction sa_default;
+            memset(&sa_default, 0, sizeof(sa_default));
+            sa_default.sa_handler = SIG_DFL;
+            sigemptyset(&sa_default.sa_mask);
+            sa_default.sa_flags = 0;
+
+            sigaction(SIGINT, &sa_default, NULL);
+            sigaction(SIGQUIT, &sa_default, NULL);
+        }
         
         int i = 0;
         int idxCorte = -1;
@@ -129,6 +141,16 @@ void ejecutar_pipes(char *comandos_pipe[], int num_comandos) {
 
         //Proceso de hijo
         if (pids[i] == 0) { 
+
+            // Struct para restablecer las señales SIGINT y SIGQUIT a su comportamiento predeterminado
+            struct sigaction sa_default;
+            memset(&sa_default, 0, sizeof(sa_default));
+            sa_default.sa_handler = SIG_DFL;
+            sigemptyset(&sa_default.sa_mask);
+            sa_default.sa_flags = 0;
+
+            sigaction(SIGINT, &sa_default, NULL);
+            sigaction(SIGQUIT, &sa_default, NULL);
             
             //Redirigir la ENTRADA
             if (in_fd != 0) {

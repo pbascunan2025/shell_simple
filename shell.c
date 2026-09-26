@@ -40,6 +40,17 @@ int main(void) {
     sigchld_action.sa_flags = SA_RESTART;
     sigaction(SIGCHLD, &sigchld_action, NULL);
 
+
+    // Ignora las señales SIGINT y SIGQUIT en el proceso padre (la Shell).
+    struct sigaction sa_ignore;
+    memset(&sa_ignore, 0, sizeof(sa_ignore));
+    sa_ignore.sa_handler = SIG_IGN;
+    sigemptyset(&sa_ignore.sa_mask);
+    sa_ignore.sa_flags = 0;
+
+    sigaction(SIGINT, &sa_ignore, NULL);
+    sigaction(SIGQUIT, &sa_ignore, NULL);
+
     //Bucle principal de ejecucion de la Shell.
     while (1) {
 
