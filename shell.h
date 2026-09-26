@@ -14,6 +14,10 @@ typedef struct {
     pid_t pid;
     int activo;
     char comando[MAX_LINEAS];
+
+    unsigned long pmon_ultimo_tiempo_usuario;
+    unsigned long pmon_ultimo_tiempo_sistema;
+    int pmon_iniciado;
 } Job;
 
 //parser.c 
@@ -37,6 +41,6 @@ void ejecutar_pipes(char *comandos_pipe[], int num_comandos);
 void comando_cd(char *tokens[]);
  
 //pmon.c 
-void ejecutar_pmon_basico(void);
+void pmon_run(int intervalo_segundo);
  
 #endif
