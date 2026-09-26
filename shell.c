@@ -87,6 +87,11 @@ int main(void) {
 
         //3. Parsea la linea ingresada separandola en tokens.
         if (num_comandos == 1) {
+
+            char comando_copia[MAX_LINEAS];
+            strncpy(comando_copia, comandos_pipe[0], sizeof(comando_copia) - 1);
+            comando_copia[sizeof(comando_copia) - 1] = '\0';
+
             int ntokens = parse_line(comandos_pipe[0], tokens, MAX_TOKENS);
             //Si la linea esta vacia, se ignora.
             if (ntokens == 0) {
@@ -100,6 +105,14 @@ int main(void) {
                 if (ntokens == 0) {
                     continue;
                 }
+
+                size_t len = strlen(comando_copia);
+                while (len > 0 && (comando_copia[len - 1] == '&' ||
+                                    comando_copia[len - 1] == ' '  ||
+                                    comando_copia[len - 1] == '\t')) {
+                    comando_copia[--len] = '\0';
+                }
+            }    
 
             if (strcmp(tokens[0], "exit") == 0) {
               int exitCode = 0;
@@ -122,7 +135,7 @@ int main(void) {
                 continue;
             }
 
-            ejecutar_comando(tokens, background, comandos_pipe[0]);
+            ejecutar_comando(tokens, background, comando_copia);
             
         } else {
             //Si hay más de 1 comando (pipes), llamamos a la función

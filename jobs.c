@@ -28,6 +28,10 @@ void registrar_job(pid_t pid, const char *comando) {
             jobs[i].pid = pid;
             jobs[i].activo = 1;
             snprintf(jobs[i].comando, sizeof(jobs[i].comando), "%s", comando);
+            
+            jobs[i].pmon_ultimo_tiempo_usuario = 0;
+            jobs[i].pmon_ultimo_tiempo_sistema = 0;
+            jobs[i].pmon_iniciado = 0;
             printf("[%d] %d\n", i + 1, pid);
             return;
         }
