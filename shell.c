@@ -100,7 +100,6 @@ int main(void) {
                 if (ntokens == 0) {
                     continue;
                 }
-            }
 
             if (strcmp(tokens[0], "exit") == 0) {
               int exitCode = 0;
@@ -115,7 +114,11 @@ int main(void) {
                 listar_jobs();
                 continue;
             } else if (strcmp(tokens[0], "pmon") == 0) {
-                ejecutar_pmon_basico();
+                int intervalo = 2;
+                if (tokens[1] != NULL) {
+                    intervalo = atoi(tokens[1]);
+                }
+                pmon_run(intervalo);
                 continue;
             }
 
