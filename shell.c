@@ -3,13 +3,15 @@
 #include <string.h>
 #include <unistd.h>
 #include <signal.h>
+#include <readline/readline.h>
+#include <readline/history.h>
 #include "shell.h"
 
 /**
  * Muestra en la pantalla el prompt de la Shell.
  * Obtiene la ruta del directorio de trabajo actual y la imprime.
  */
-static void imprimir_prompt(void) {
+static void obtener_prompt(char *buffer, size_t size) {
     char cwd[1024];
 
     //Obtiene la ruta del directorio actual.
@@ -18,19 +20,15 @@ static void imprimir_prompt(void) {
         strcpy(cwd, "?");
     }
 
-    //Imprime el prompt con la ruta actual en color celeste.
-    printf("Shell:\033[38;5;117m%s\033[0m$ ", cwd);
-
-    //Fuerza el vacciado del buffer de salida para asegurar que el prompt
-    //se dibuje inmediatamente en la terminal sin esperar un "\n"
-    fflush(stdout);
+    snprintf(buffer, size, "Shell:\001\033[38;5;117m\002%s\001\033[0m\002$ ", cwd);
 }
 
 /**
  * Punto de entrada princinpal del interprete de comandos.
  */
 int main(void) {
-    char linea[MAX_LINEAS];
+    char prompt_str[1200];
+    char *input_line;
     char *tokens[MAX_TOKENS];
     struct sigaction sigchld_action;
 
@@ -56,18 +54,26 @@ int main(void) {
 
         recolectar_jobs();
 
-        //1. Muestra el prompt.
-        imprimir_prompt();
+        // Obtiene la linea de entrada del usuario con readline y la almacena en input_line.
+        obtener_prompt(prompt_str, sizeof(prompt_str));
+        input_line = readline(prompt_str);
 
-        //2. Lee la entrada del usuario desde el input estandar.
-        //Detecta EOF (Ctrl+D) cuando fgets retorna NULL.
-        if (fgets(linea, sizeof(linea), stdin) == NULL) {
+        // Si el usuario presiona Ctrl+D (EOF), readline retorna NULL y se sale del bucle.
+        if (input_line == NULL) {
             printf("\n");
-            break; //Sale del bucle y finaliza la Shell.
+            break;
         }
 
-        //Arreglo para guardar los comandos separados por "|"
-        char *comandos_pipe[MAX_TOKENS]; 
+        if (*input_line != '\0') {
+            add_history(input_line);
+        }
+
+        char linea[MAX_LINEAS];
+        strncpy(linea, input_line, sizeof(linea) - 1);
+        linea[sizeof(linea) - 1] = '\0';
+        free(input_line);
+
+        char *comandos_pipe[MAX_TOKENS];
         int num_comandos = parse_pipes(linea, comandos_pipe, MAX_TOKENS);
 
         if (num_comandos == 0) {
@@ -84,7 +90,7 @@ int main(void) {
             int ntokens = parse_line(comandos_pipe[0], tokens, MAX_TOKENS);
             //Si la linea esta vacia, se ignora.
             if (ntokens == 0) {
-                continue;        
+                continue;
             }
 
             int background = 0;
