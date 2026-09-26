@@ -63,13 +63,47 @@ void recolectar_jobs(void) {
     hay_hijos_terminados = 0;
 }
 
+// Obtiene el estado de un job a partir de su PID.
+static const char *obtener_estado_job(pid_t pid) {
+    char ruta[64];
+    snprintf(ruta, sizeof(ruta), "/proc/%d/stat", pid);
+
+    // Abre el archivo /proc/[pid]/stat para leer el estado del proceso.
+    FILE *archivo = fopen(ruta, "r");
+    if (archivo == NULL) {
+        return "Desconocido";
+    }
+
+    int pid_leido;
+    char comando[256];
+    char estado;
+    int campos_leidos = fscanf(archivo, "%d (%255[^)]) %c",
+                               &pid_leido, comando, &estado);
+    fclose(archivo);
+
+    if (campos_leidos != 3) {
+        return "Desconocido";
+    }
+
+    // Retorna el estado
+    switch (estado) {
+        case 'R': return "Ejecutando";
+        case 'S': return "Durmiendo";
+        case 'D': return "Esperando (I/O)";
+        case 'Z': return "Zombie";
+        case 'T': return "Detenido";
+        default: return "Desconocido";
+    }
+}
+
 // Escribe en pantalla la lista de jobs activos.
 void listar_jobs(void) {
     recolectar_jobs();
 
     for (int i = 0; i < MAX_JOBS; i++) {
         if (jobs[i].activo) {
-            printf("[%d] Ejecutando %d %s\n", i + 1, jobs[i].pid,
+            const char *estado = obtener_estado_job(jobs[i].pid);
+            printf("[%d] %-15s %d %s\n", i + 1, estado, jobs[i].pid,
                    jobs[i].comando);
         }
     }
