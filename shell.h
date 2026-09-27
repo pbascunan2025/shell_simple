@@ -35,7 +35,7 @@ void listar_jobs(void);
  
 //exec.c
 void ejecutar_comando(char *tokens[], int background, const char *comando);
-void ejecutar_pipes(char *comandos_pipe[], int num_comandos);
+void ejecutar_pipes(char *comandos_pipe[], int num_comandos, int background, const char *comando);
  
 //builtins.c
 void comando_cd(char *tokens[]);

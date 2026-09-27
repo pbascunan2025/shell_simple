@@ -73,6 +73,10 @@ int main(void) {
         linea[sizeof(linea) - 1] = '\0';
         free(input_line);
 
+        char linea_original[MAX_LINEAS];
+        strncpy(linea_original, linea, sizeof(linea_original)- 1);
+        linea_original[sizeof(linea_original) - 1] = '\0';
+
         char *comandos_pipe[MAX_TOKENS];
         int num_comandos = parse_pipes(linea, comandos_pipe, MAX_TOKENS);
 
@@ -138,8 +142,44 @@ int main(void) {
             ejecutar_comando(tokens, background, comando_copia);
             
         } else {
+
+            int background = 0;
+            char *ultimo_segmento = comandos_pipe[num_comandos - 1];
+            size_t len = strlen(ultimo_segmento);
+
+            while (len > 0 && (ultimo_segmento[len - 1] == ' ' || ultimo_segmento[len - 1] == '\t')) {
+                len--;
+            }
+
+            if (len > 0 && ultimo_segmento[len - 1] == '&') {
+
+                background = 1;
+                len--;
+
+                while (len > 0 && (ultimo_segmento[len - 1] == ' ' || ultimo_segmento[len - 1] == '\t')) {
+                    len--;
+                }
+
+                ultimo_segmento[len] = '\0';
+            }
+
+            char comando_pipeline[MAX_LINEAS];
+            strncpy(comando_pipeline, linea_original, sizeof(comando_pipeline) - 1);
+            comando_pipeline[sizeof(comando_pipeline) - 1] = '\0';
+
+            if (background) {
+
+                size_t len2 = strlen(comando_pipeline);
+
+                while (len2 > 0 && (comando_pipeline[len2 - 1] == ' ' || comando_pipeline[len2 - 1] == '&' || comando_pipeline[len2 - 1] == '\t')) {
+
+                    comando_pipeline[--len2] = '\0';
+                }
+
+            }
+
             //Si hay más de 1 comando (pipes), llamamos a la función
-            ejecutar_pipes(comandos_pipe, num_comandos);
+            ejecutar_pipes(comandos_pipe, num_comandos, background, comando_pipeline);
         }
     }
 

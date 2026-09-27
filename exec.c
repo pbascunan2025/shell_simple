@@ -114,10 +114,11 @@ void ejecutar_comando(char *tokens[], int background, const char *comando) {
 }
 
 
-void ejecutar_pipes(char *comandos_pipe[], int num_comandos) {
+void ejecutar_pipes(char *comandos_pipe[], int num_comandos, int background, const char *comando) {
     int in_fd = 0; //Lee la entrada estandar
     int fd[2];     //Arreglo para el pipe
     pid_t pids[MAX_TOKENS];
+    pid_t pgid_pipeline = 0;
 
     for (int i = 0; i < num_comandos; i++) {
         //Separamos el comando por espacios para obtener sus argumentos
@@ -143,17 +144,22 @@ void ejecutar_pipes(char *comandos_pipe[], int num_comandos) {
 
         //Proceso de hijo
         if (pids[i] == 0) { 
-
-            // Struct para restablecer las señales SIGINT y SIGQUIT a su comportamiento predeterminado
-            struct sigaction sa_default;
-            memset(&sa_default, 0, sizeof(sa_default));
-            sa_default.sa_handler = SIG_DFL;
-            sigemptyset(&sa_default.sa_mask);
-            sa_default.sa_flags = 0;
-
-            sigaction(SIGINT, &sa_default, NULL);
-            sigaction(SIGQUIT, &sa_default, NULL);
             
+            if (background) {
+
+                setpgid(0, pgid_pipeline);
+            } else {
+                // Struct para restablecer las señales SIGINT y SIGQUIT a su comportamiento predeterminado
+                struct sigaction sa_default;
+                memset(&sa_default, 0, sizeof(sa_default));
+                sa_default.sa_handler = SIG_DFL;
+                sigemptyset(&sa_default.sa_mask);
+                sa_default.sa_flags = 0;
+
+                sigaction(SIGINT, &sa_default, NULL);
+                sigaction(SIGQUIT, &sa_default, NULL);
+            }
+
             //Redirigir la ENTRADA
             if (in_fd != 0) {
                 dup2(in_fd, STDIN_FILENO); //STDIN ahora es el extremo de lectura del pipe anterior
@@ -171,7 +177,17 @@ void ejecutar_pipes(char *comandos_pipe[], int num_comandos) {
             execvp(tokens[0], tokens);
             perror(tokens[0]);
             _exit(127);
-        } else {          
+        } else {    
+            
+            if(background) {
+
+                if (pgid_pipeline == 0) {
+                    pgid_pipeline = pids[i];
+                }
+
+                setpgid(pids[i], pgid_pipeline);
+            }
+
             if (in_fd != 0) {
                 close(in_fd); //El padre ya le pasó este in_fd al hijo
             }
@@ -181,6 +197,11 @@ void ejecutar_pipes(char *comandos_pipe[], int num_comandos) {
                 in_fd = fd[0]; 
             }
         }
+    }
+
+    if (background) {
+        registrar_job(pids[num_comandos - 1], comando);
+        return;
     }
 
     //Esperar a todos los hijos
