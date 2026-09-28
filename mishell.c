@@ -10,8 +10,14 @@
 
 
 /**
- * Muestra en la pantalla el prompt de la Shell.
- * Obtiene la ruta del directorio de trabajo actual y la imprime.
+ * Construye el texto del prompt de la Shell con el directorio actual.
+ *
+ * @param buffer Buffer donde se escribe el prompt.
+ * @param size Tamaño del buffer.
+ *
+ * Obtiene la ruta del directorio de trabajo actual y la incluye en el prompt.
+ * Los marcadores \001 y \002 delimitan las secuencias de color (no imprimibles)
+ * para que readline calcule bien el ancho del prompt.
  */
 static void obtener_prompt(char *buffer, size_t size) {
     char cwd[MAX_LINEAS];
@@ -25,7 +31,15 @@ static void obtener_prompt(char *buffer, size_t size) {
     snprintf(buffer, size, "Shell:\001\033[38;5;117m\002%s\001\033[0m\002$ ", cwd);
 }
 
-/* Elimina & solo si es el último carácter no escapado y está fuera de comillas. */
+/**
+ * Detecta y elimina el "&" final de la linea (ejecucion en background).
+ * Solo se considera si es el ultimo caracter no blanco y esta fuera de comillas
+ * (no se procesan secuencias de escape con "\").
+ *
+ * @param linea Linea de entrada; se modifica si se encuentra el "&".
+ *
+ * @return int 1 si se quito el "&" (el comando va en background), 0 en caso contrario.
+ */
 static int quitar_background(char *linea) {
     char comilla = 0;
     char *ultimo = NULL;
@@ -51,6 +65,14 @@ static int quitar_background(char *linea) {
     return 1;
 }
 
+/**
+ * Indica si un token tiene la forma de una asignacion de variable NOMBRE=valor.
+ * El nombre debe comenzar con letra o "_" y contener solo letras, digitos o "_".
+ *
+ * @param token Token a evaluar.
+ *
+ * @return int 1 si es una asignacion valida, 0 en caso contrario.
+ */
 static int es_asignacion(const char *token) {
     if (!token || (!isalpha((unsigned char)token[0]) && token[0] != '_')) return 0;
     const char *p = token + 1;
@@ -61,12 +83,19 @@ static int es_asignacion(const char *token) {
 
 /**
  * Punto de entrada princinpal del interprete de comandos.
+ *
+ * Instala los manejadores de señales y ejecuta el ciclo leer-parsear-ejecutar:
+ * lee la linea con readline, expande variables, detecta background, separa
+ * por pipes y despacha a los comandos internos o a la ejecucion externa.
  */
 int main(void) {
     char prompt_str[1200];
     char *input_line;
     char *tokens[MAX_TOKENS];
 
+    // Manejador de SIGCHLD: marca que hay hijos terminados. La recoleccion real
+    // (waitpid no bloqueante) se hace en recolectar_jobs(). SA_RESTART evita
+    // que se interrumpan llamadas lentas como la lectura del teclado.
     struct sigaction sigchld_action;
     memset(&sigchld_action, 0, sizeof(sigchld_action));
     sigchld_action.sa_handler = manejar_sigchld;
@@ -74,7 +103,8 @@ int main(void) {
     sigchld_action.sa_flags = SA_RESTART;
     sigaction(SIGCHLD, &sigchld_action, NULL);
 
-    // Ignora las señales SIGINT y SIGQUIT en el proceso padre (la Shell).
+    // Ignora las señales de terminal (SIGINT, SIGQUIT, SIGTSTP, SIGTTIN y SIGTTOU)
+    // en el proceso padre (la Shell). Los hijos restauran su disposicion por defecto.
     struct sigaction sa_ignore;
     memset(&sa_ignore, 0, sizeof(sa_ignore));
     sa_ignore.sa_handler = SIG_IGN;
@@ -87,6 +117,7 @@ int main(void) {
 
     //Bucle principal de ejecucion de la Shell.
     while (1) {
+        // Recoge los jobs terminados y avisa "Done" antes de mostrar el prompt.
         recolectar_jobs();
 
         // Obtiene la linea de entrada del usuario con readline y la almacena en input_line.
@@ -98,17 +129,21 @@ int main(void) {
             printf("\n");
             break;
         }
+        // Las lineas no vacias se guardan en el historial (navegable con las flechas).
         if (*input_line != '\0') add_history(input_line);
 
         char linea[MAX_LINEAS];
         snprintf(linea, sizeof(linea), "%s", input_line);
         free(input_line);
 
+        // Reemplaza $VAR y ${VAR} por su valor (fuera de comillas simples).
         if (expandir_variables(linea, sizeof(linea)) < 0) {
             fprintf(stderr, "linea demasiado larga despues de expandir variables\n");
             continue;
         }
 
+        // Detecta y quita el "&" final; luego separa con espacios los operadores
+        // <, >, >>, | y & para que el tokenizador los reconozca aunque vayan pegados.
         int background = quitar_background(linea);
         if (normalizar_operadores(linea, sizeof(linea)) < 0) {
             fprintf(stderr, "linea demasiado larga\n");
@@ -116,9 +151,12 @@ int main(void) {
         }
         if (linea[0] == '\0') continue;
 
+        // Copia de la linea completa: parse_pipes/parse_line la modifican, y el
+        // texto original se necesita para mostrarlo en la lista de jobs.
         char linea_original[MAX_LINEAS];
         snprintf(linea_original, sizeof(linea_original), "%s", linea);
 
+        // Divide la linea en comandos separados por "|" (respetando comillas).
         char *comandos_pipe[MAX_COMANDOS];
         int num_comandos = parse_pipes(linea, comandos_pipe, MAX_COMANDOS);
         if (num_comandos < 0) {
@@ -131,7 +169,7 @@ int main(void) {
         //    printf("Comando %d encontrado: [%s]\n", i, comandos_pipe[i]);
         //}
 
-        //3. Parsea la linea ingresada separandola en tokens.
+        //Parsea la linea ingresada separandola en tokens.
         if (num_comandos == 1) {
 
             int ntokens = parse_line(comandos_pipe[0], tokens, MAX_TOKENS);
@@ -142,6 +180,8 @@ int main(void) {
 
             if (ntokens == 0) continue;
 
+            // Asignacion de variable de entorno (NOMBRE=valor): se maneja en la
+            // propia shell con setenv().
             if (es_asignacion(tokens[0])) {
                 char *igual = strchr(tokens[0], '=');
                 *igual = '\0';
@@ -149,6 +189,7 @@ int main(void) {
                 continue;
             }
 
+            // Comandos internos: se ejecutan en el proceso de la shell (sin fork).
             if (strcmp(tokens[0], "exit") == 0) {
                 int codigo = 0;
                 if (tokens[1]) codigo = atoi(tokens[1]);
@@ -165,6 +206,7 @@ int main(void) {
                 continue;
             }
             if (strcmp(tokens[0], "pmon") == 0) {
+                // Intervalo de refresco en segundos (2 por defecto).
                 int intervalo = tokens[1] ? atoi(tokens[1]) : 2;
                 pmon_run(intervalo);
                 continue;
@@ -180,10 +222,12 @@ int main(void) {
                 continue;
             }
 
+            // Comando externo (fork + execvp), en foreground o background.
             ejecutar_comando(tokens, background, linea_original);
         } else {
 
             //Si hay más de 1 comando (pipes), llamamos a la función
+            //(cada comando corre en su propio proceso, dentro de un mismo grupo de procesos)
             ejecutar_pipes(comandos_pipe, num_comandos, background, linea_original);
         }
     }
