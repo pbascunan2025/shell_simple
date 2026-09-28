@@ -7,9 +7,11 @@
 * Pablo Sebastian Bascuñan Espina
 
 ## Requisitos previos
-Tener instalado 'gcc'
-La herramienta 'make'
-La biblioteca 'readline'
+* Tener instalado 'gcc'
+* La herramienta 'make'
+* La biblioteca 'readline'
+
+---
 
 ### Compilación mediante Makefile
 
