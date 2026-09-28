@@ -3,6 +3,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <signal.h>
+#include <time.h>
 #include "shell.h"
 
 static volatile sig_atomic_t pmon_refrescar = 0;
@@ -19,48 +20,44 @@ typedef struct {
 
 //funcion para comparar dos procesos por %CPU (de mayor a menor)
 static int comparar_cpu(const void *a, const void *b) {
-    const PmonRow *rowA = (const PmonRow *)a;
-    const PmonRow *rowB = (const PmonRow *)b;
-    if (rowA->cpu < rowB->cpu) return 1;
-    if (rowA->cpu > rowB->cpu) return -1;
-    return 0;
+    const PmonRow *ra = a;
+    const PmonRow *rb = b;
+    if (ra->cpu < rb->cpu) return 1;
+    if (ra->cpu > rb->cpu) return -1;
+    return (ra->pid > rb->pid) - (ra->pid < rb->pid);
 }
 
-static void pmon_manejar_alarma(int num_senal) {
+static void pmon_manejar_alarma(int signo) {
 
-    (void)num_senal;
+    (void)signo;
     pmon_refrescar = 1;
 }
 
-static void pmon_manejar_signit(int numm_senal) {
+static void pmon_manejar_sigint(int signo) {
 
-    (void)numm_senal;
+    (void)signo;
     pmon_salir = 1;
 }
 
-static int leer_proc_stat(pid_t pid, char *estado, unsigned long *tiempo_usuario, unsigned long *tiempo_sistema) {
-
+static int leer_proc_stat(pid_t pid, char *estado,
+                          unsigned long *utime, unsigned long *stime) {
     char ruta[64];
     snprintf(ruta, sizeof(ruta), "/proc/%d/stat", pid);
 
     FILE *archivo = fopen(ruta, "r");
 
-    if (archivo == NULL) {
-        return -1;
-    }
+    if (!archivo) return -1;
 
     int pid_leido;
     char comando[256];
     char estado_leido;
-
-    int campos_leidos = fscanf(archivo, "%d (%255[^)]) %c " "%*d %*d %*d %*d %*d %*u %*u %*u %*u %*u " "%lu %lu", &pid_leido, comando, &estado_leido, tiempo_usuario, tiempo_sistema);
-
+    int ok = fscanf(archivo,
+                    "%d (%255[^)]) %c "
+                    "%*d %*d %*d %*d %*d %*u %*u %*u %*u %*u "
+                    "%lu %lu",
+                    &pid_leido, comando, &estado_leido, utime, stime);
     fclose(archivo);
-
-    if (campos_leidos != 5) {
-        return -1;
-    }
-
+    if (ok != 5) return -1;
     *estado = estado_leido;
     return 0;
 }
@@ -72,133 +69,130 @@ static long leer_memoria_rss(pid_t pid) {
 
     FILE *archivo = fopen(ruta, "r");
 
-    if ( archivo == NULL) {
-        return -1;
-    }
+    if (!archivo) return -1;
 
     char linea[256];
     long memoria_rss = -1;
 
-    while (fgets(linea, sizeof(linea), archivo) != NULL) {
-
+    while (fgets(linea, sizeof(linea), archivo)) {
         if (strncmp(linea, "VmRSS:", 6) == 0) {
             sscanf(linea + 6, "%ld", &memoria_rss);
             break;
         }
     }
-
     fclose(archivo);
     return memoria_rss;
 }
 
-static const char *nombre_estado(char c) {
-    switch (c)
-    {
-    case 'R': return "ejecutando";
-    case 'S': return "durmiendo";
-    case 'D': return "esperando";
-    case 'Z': return "zombie";
-    case 'T': return "detenido";
-    default: return "desconocido";
+static const char *nombre_estado(char estado) {
+    switch (estado) {
+        case 'R': return "ejecutando";
+        case 'S': return "durmiendo";
+        case 'D': return "esperando";
+        case 'Z': return "zombie";
+        case 'T': return "detenido";
+        default: return "desconocido";
     }
 }
 
-static void dibujar_tabla(double intervalo_segundos) {
 
-    long ticks_por_segundos = sysconf(_SC_CLK_TCK);
+static void dibujar_tabla(void) {
 
-    printf("%-7s %-15s %-12s %-13s %-9s\n", "PID", "COMANDO", "ESTADO", "%CPU(aprox)", "RSS(KB)");
+    long ticks_por_segundo = sysconf(_SC_CLK_TCK);
+
+    struct timespec ahora;
+    clock_gettime(CLOCK_MONOTONIC, &ahora);
 
     PmonRow filas[MAX_JOBS];
     int count = 0;
 
-    for (int i = 0; i < MAX_JOBS; i++) {
+    printf("%-7s %-15s %-12s %-13s %-9s\n",
+           "PID", "COMANDO", "ESTADO", "%CPU(aprox)", "RSS(KB)");
 
-        if (!jobs[i].activo) {
+    for (int i = 0; i < MAX_JOBS && count < MAX_JOBS; i++) {
+
+        if (!jobs[i].activo || jobs[i].restantes <= 0) {
             continue;
         }
 
+        pid_t pid = jobs[i].pgid;
         char estado;
-        unsigned long tiempo_usuario, tiempo_sistema;
+        unsigned long utime, stime;
 
-        if (leer_proc_stat(jobs[i].pid, &estado, &tiempo_usuario, &tiempo_sistema) != 0) {
-
-            jobs[i].activo = 0;
+        if (leer_proc_stat(pid, &estado, &utime, &stime) != 0) {
             continue;
         }
 
-        long memoria_rss = leer_memoria_rss(jobs[i].pid);
+        double cpu = 0.0;
+        if (jobs[i].pmon_iniciado && ticks_por_segundo > 0) {
 
-        double porcentaje_cpu = 0.0;
-
-        if (jobs[i].pmon_iniciado && intervalo_segundos > 0 && ticks_por_segundos > 0) {
-
-            unsigned long ticks_ahora = tiempo_usuario + tiempo_sistema;
-            unsigned long ticks_antes = jobs[i].pmon_ultimo_tiempo_usuario + jobs[i].pmon_ultimo_tiempo_sistema;
-            unsigned long delta_ticks = ticks_ahora - ticks_antes;
-            double delta_cpu_segundos = (double)delta_ticks / (double)ticks_por_segundos;
-            porcentaje_cpu = (delta_cpu_segundos / intervalo_segundos) * 100.0;
+            unsigned long ahora_ticks = utime + stime;
+            unsigned long antes_ticks = jobs[i].pmon_ultimo_tiempo_usuario + jobs[i].pmon_ultimo_tiempo_sistema;
+            unsigned long delta_ticks = (ahora_ticks >= antes_ticks) ? ahora_ticks - antes_ticks : 0;
+            double tiempo_transcurrido = (double)(ahora.tv_sec - jobs[i].pmon_ultimo_tiempo_real.tv_sec) +
+                             (double)(ahora.tv_nsec - jobs[i].pmon_ultimo_tiempo_real.tv_nsec) / 1e9;
+            if (tiempo_transcurrido > 0.0) {
+                cpu = ((double)delta_ticks / (double)ticks_por_segundo) /
+                      tiempo_transcurrido * 100.0;
+            }
         }
 
-        jobs[i].pmon_ultimo_tiempo_usuario = tiempo_usuario;
-        jobs[i].pmon_ultimo_tiempo_sistema = tiempo_sistema;
+        jobs[i].pmon_ultimo_tiempo_usuario = utime;
+        jobs[i].pmon_ultimo_tiempo_sistema = stime;
+        jobs[i].pmon_ultimo_tiempo_real = ahora;
         jobs[i].pmon_iniciado = 1;
 
         //guarda los datos en el array
-        filas[count].pid = jobs[i].pid;
-        strncpy(filas[count].comando, jobs[i].comando, sizeof(filas[count].comando));
+        filas[count].pid = pid;
+        snprintf(filas[count].comando, sizeof(filas[count].comando), "%.255s", jobs[i].comando);
         filas[count].estado = nombre_estado(estado);
-        filas[count].cpu = porcentaje_cpu;
-        filas[count].rss = memoria_rss;
+        filas[count].cpu = cpu;
+        filas[count].rss = leer_memoria_rss(pid);
         count++;
 
     }
 
     //ordena el array usando qsort y la funcion de comparar
-    qsort(filas, count, sizeof(PmonRow), comparar_cpu);
+    qsort(filas, (size_t)count, sizeof(PmonRow), comparar_cpu);
 
     //imprime el arreglo ya ordenado
-    for (int k = 0; k < count; k++) {
+    for (int i = 0; i < count; i++) {
         //resalta el primer proceso si es que está consumiendo CPU
-        if (k == 0 && filas[k].cpu > 0.0) { 
-            printf("\033[1;32m%-7d %-15s %-12s %-13.1f %-9ld\033[0m\n", 
-                   filas[k].pid, filas[k].comando, filas[k].estado, filas[k].cpu, filas[k].rss);
+        if (i == 0 && filas[i].cpu > 0.0) {
+            printf("\033[1;32m%-7d %-15s %-12s %-13.1f %-9ld\033[0m\n",
+                   filas[i].pid, filas[i].comando, filas[i].estado,
+                   filas[i].cpu, filas[i].rss);
         } else {
-            printf("%-7d %-15s %-12s %-13.1f %-9ld\n", 
-                   filas[k].pid, filas[k].comando, filas[k].estado, filas[k].cpu, filas[k].rss);
+            printf("%-7d %-15s %-12s %-13.1f %-9ld\n",
+                   filas[i].pid, filas[i].comando, filas[i].estado,
+                   filas[i].cpu, filas[i].rss);
         }
     }
 
-    fflush(stdout);   
+    fflush(stdout);
 }
 
 void pmon_run(int intervalo_segundo) {
+    if (intervalo_segundo <= 0) intervalo_segundo = 2;
 
-    if (intervalo_segundo <= 0) {
-        intervalo_segundo = 2;
-    }
+    struct sigaction alarma, anterior_alarma;
+    struct sigaction sigint, anterior_sigint;
+    memset(&alarma, 0, sizeof(alarma));
+    memset(&sigint, 0, sizeof(sigint));
+    alarma.sa_handler = pmon_manejar_alarma;
+    sigint.sa_handler = pmon_manejar_sigint;
+    sigemptyset(&alarma.sa_mask);
+    sigemptyset(&sigint.sa_mask);
 
-    struct sigaction accion_alarma, accion_int, accion_alarma_anterior, accion_int_anterior;
-    
-    memset(&accion_alarma, 0, sizeof(accion_alarma));
-    accion_alarma.sa_handler = pmon_manejar_alarma;
-    sigemptyset(&accion_alarma.sa_mask);
-    accion_alarma.sa_flags = 0;
-    sigaction(SIGALRM, &accion_alarma, &accion_alarma_anterior);
+    sigaction(SIGALRM, &alarma, &anterior_alarma);
+    sigaction(SIGINT, &sigint, &anterior_sigint);
 
-    memset(&accion_int, 0, sizeof(accion_int));
-    accion_int.sa_handler = pmon_manejar_signit;
-    sigemptyset(&accion_int.sa_mask);
-    accion_int.sa_flags = 0;
-    sigaction(SIGINT, &accion_int, &accion_int_anterior);
-
+    pmon_refrescar = 0;
     pmon_salir = 0;
 
-    // Limpia jobs que ya hayan terminado antes de entrar, para no
-    // arrastrar zombies de antes de llamar a pmon.
     recolectar_jobs();
-    dibujar_tabla(0);
-    alarm(intervalo_segundo);
+    dibujar_tabla();
+    alarm((unsigned int)intervalo_segundo);
 
     while (!pmon_salir) {
 
@@ -215,16 +209,15 @@ void pmon_run(int intervalo_segundo) {
             // mientras seguimos dentro de pmon.
             recolectar_jobs();
             printf("\n");
-            dibujar_tabla((double)intervalo_segundo);
-            alarm(intervalo_segundo);
+            dibujar_tabla();
+            alarm((unsigned int)intervalo_segundo);
         }
     }
 
     alarm(0);
 
-    sigaction(SIGALRM, &accion_alarma_anterior, NULL);
-    sigaction(SIGINT, &accion_int_anterior, NULL);
-
+    sigaction(SIGALRM, &anterior_alarma, NULL);
+    sigaction(SIGINT, &anterior_sigint, NULL);
+    
     printf("\n");
-
 }

@@ -5,8 +5,8 @@ LDFLAGS = -lreadline
 SRCS = shell.c parser.c exec.c jobs.c builtins.c pmon.c
 OBJS = $(SRCS:.c=.o)
 
-shell: $(OBJS)
-	$(CC) $(CFLAGS) -o mishell $(OBJS) $(LDFLAGS)
+mishell: $(OBJS)
+	$(CC) $(CFLAGS) -o $@ $(OBJS) $(LDFLAGS)
 
 %.o: %.c shell.h
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -14,4 +14,4 @@ shell: $(OBJS)
 clean:
 	rm -f mishell $(OBJS)
 
-.PHONY: clean
+.PHONY: mishell clean
