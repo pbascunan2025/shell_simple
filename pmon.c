@@ -1,3 +1,12 @@
+/**
+ * pmon.c: monitor de procesos en background ("mini-top").
+ *
+ * Lee directamente /proc/[pid]/stat y /proc/[pid]/status de los jobs
+ * registrados por la shell y muestra una tabla que se refresca
+ * periodicamente con alarm() + SIGALRM. Termina con Ctrl+C sin cerrar
+ * la shell.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -6,8 +15,9 @@
 #include <time.h>
 #include "shell.h"
 
-static volatile sig_atomic_t pmon_refrescar = 0;
-static volatile sig_atomic_t pmon_salir = 0;
+// Banderas modificadas por los manejadores de señal (deben ser sig_atomic_t).
+static volatile sig_atomic_t pmon_refrescar = 0; // SIGALRM: hay que redibujar la tabla
+static volatile sig_atomic_t pmon_salir = 0;     // SIGINT: hay que salir de pmon
 
 //struct temporal para ordenar los procesos en pmon
 typedef struct {
@@ -19,6 +29,7 @@ typedef struct {
 } PmonRow;
 
 //funcion para comparar dos procesos por %CPU (de mayor a menor)
+//ante empate en %CPU, desempata por PID ascendente. Usada por qsort.
 static int comparar_cpu(const void *a, const void *b) {
     const PmonRow *ra = a;
     const PmonRow *rb = b;
@@ -27,18 +38,38 @@ static int comparar_cpu(const void *a, const void *b) {
     return (ra->pid > rb->pid) - (ra->pid < rb->pid);
 }
 
+/**
+ * Manejador de SIGALRM: solo levanta la bandera para que el ciclo principal
+ * de pmon_run redibuje la tabla (el trabajo pesado no se hace en el handler).
+ */
 static void pmon_manejar_alarma(int signo) {
 
     (void)signo;
     pmon_refrescar = 1;
 }
 
+/**
+ * Manejador de SIGINT (Ctrl+C) mientras pmon esta activo: levanta la bandera
+ * de salida para volver al prompt de la shell sin cerrarla.
+ */
 static void pmon_manejar_sigint(int signo) {
 
     (void)signo;
     pmon_salir = 1;
 }
 
+/**
+ * Lee /proc/[pid]/stat y extrae el estado y los tiempos de CPU del proceso.
+ * El nombre del comando (entre parentesis) se lee pero se descarta.
+ *
+ * @param pid   Proceso a consultar.
+ * @param estado Recibe el caracter de estado (R, S, D, Z, T...).
+ * @param utime Recibe el tiempo en modo usuario (en ticks de reloj).
+ * @param stime Recibe el tiempo en modo kernel (en ticks de reloj).
+ *
+ * @return int 0 si se leyo correctamente; -1 si el proceso ya no existe
+ *             (por ejemplo, termino entre dos lecturas) o el formato es invalido.
+ */
 static int leer_proc_stat(pid_t pid, char *estado,
                           unsigned long *utime, unsigned long *stime) {
     char ruta[64];
@@ -51,6 +82,7 @@ static int leer_proc_stat(pid_t pid, char *estado,
     int pid_leido;
     char comando[256];
     char estado_leido;
+    // Se saltan los campos 4 al 13 (ppid ... cmajflt) hasta llegar a utime (14) y stime (15).
     int ok = fscanf(archivo,
                     "%d (%255[^)]) %c "
                     "%*d %*d %*d %*d %*d %*u %*u %*u %*u %*u "
@@ -62,6 +94,14 @@ static int leer_proc_stat(pid_t pid, char *estado,
     return 0;
 }
 
+/**
+ * Lee la memoria residente (campo VmRSS) desde /proc/[pid]/status.
+ *
+ * @param pid Proceso a consultar.
+ *
+ * @return long Memoria residente en KB; -1 si no se pudo leer el archivo
+ *              o el campo no existe (ej. procesos zombie).
+ */
 static long leer_memoria_rss(pid_t pid) {
 
     char ruta[64];
@@ -84,6 +124,9 @@ static long leer_memoria_rss(pid_t pid) {
     return memoria_rss;
 }
 
+/**
+ * Traduce el caracter de estado de /proc al texto que se muestra en la tabla.
+ */
 static const char *nombre_estado(char estado) {
     switch (estado) {
         case 'R': return "ejecutando";
@@ -95,7 +138,19 @@ static const char *nombre_estado(char estado) {
     }
 }
 
-
+/**
+ * Dibuja una vez la tabla de jobs en background activos.
+ *
+ * Por cada job activo lee su estado, CPU y RSS desde /proc. El %CPU se calcula
+ * como el delta de (utime+stime) entre la lectura anterior y la actual, dividido
+ * por el tiempo real transcurrido (CLOCK_MONOTONIC). La lectura anterior se
+ * guarda en los campos pmon_* de cada Job, por lo que la primera vez que se
+ * muestra un job su %CPU es 0.0.
+ *
+ * Se monitorea el proceso lider del job (jobs[i].pgid). Si su /proc ya no
+ * se puede leer (el proceso termino), el job simplemente no se lista.
+ * Las filas se ordenan por %CPU descendente y la primera se resalta.
+ */
 static void dibujar_tabla(void) {
 
     long ticks_por_segundo = sysconf(_SC_CLK_TCK);
@@ -172,6 +227,16 @@ static void dibujar_tabla(void) {
     fflush(stdout);
 }
 
+/**
+ * Ejecuta el modo de monitoreo pmon (comando interno de la shell).
+ *
+ * Instala temporalmente manejadores para SIGALRM (refresco periodico con
+ * alarm()) y SIGINT (salida limpia), dibuja la tabla y espera con pause()
+ * hasta que llegue una señal. Al salir restaura las disposiciones anteriores,
+ * de modo que Ctrl+C vuelve a ser ignorado por la shell.
+ *
+ * @param intervalo_segundo Segundos entre refrescos; si es <= 0 se usa 2.
+ */
 void pmon_run(int intervalo_segundo) {
     if (intervalo_segundo <= 0) intervalo_segundo = 2;
 
@@ -184,6 +249,7 @@ void pmon_run(int intervalo_segundo) {
     sigemptyset(&alarma.sa_mask);
     sigemptyset(&sigint.sa_mask);
 
+    // Se guardan las disposiciones anteriores para restaurarlas al terminar.
     sigaction(SIGALRM, &alarma, &anterior_alarma);
     sigaction(SIGINT, &sigint, &anterior_sigint);
 
@@ -214,6 +280,7 @@ void pmon_run(int intervalo_segundo) {
         }
     }
 
+    // Cancela cualquier alarma pendiente y restaura los manejadores originales.
     alarm(0);
 
     sigaction(SIGALRM, &anterior_alarma, NULL);

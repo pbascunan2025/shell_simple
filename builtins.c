@@ -14,6 +14,8 @@
 
 
 // Comando interno "cd".
+// Debe ejecutarse en la propia shell (no en un hijo) para que el cambio de
+// directorio afecte a la shell.
 void comando_cd(char *tokens[]) {
     const char *directorio = tokens[1];
 
@@ -26,12 +28,22 @@ void comando_cd(char *tokens[]) {
         }
     }
 
-    // Imprime error en color rojo si no se encuentra el directorio.
+    // Si chdir falla (ej. el directorio no existe), informa el error con perror.
     if (chdir(directorio) != 0) {
         perror("cd");
     }
 }
 
+/**
+ * Espera en foreground a que terminen los procesos restantes de un job
+ * (usado por fg). Usa waitpid sobre el grupo de procesos del job con
+ * WUNTRACED para detectar si el job vuelve a detenerse.
+ *
+ * @param job Job a esperar.
+ *
+ * @return int 1 si el job se detuvo (queda marcado como detenido);
+ *             0 si terminaron todos sus procesos (el job se marca como completado).
+ */
 static int esperar_job(Job *job) {
     int restantes = job->restantes;
 
@@ -76,6 +88,12 @@ static int esperar_job(Job *job) {
 //    Comandos fg/bg  //
 //====================//
 
+/**
+ * Comando interno "fg [%n | pgid]": trae un job a foreground.
+ * Le cede el terminal (tcsetpgrp), lo reanuda con SIGCONT y espera a que
+ * termine o se detenga de nuevo. Sin argumento usa el job mas reciente.
+ * Al terminar devuelve el terminal a la shell.
+ */
 void comando_fg(char *tokens[]) {
     Job *job = buscar_job(tokens[1]);
     
@@ -100,6 +118,11 @@ void comando_fg(char *tokens[]) {
     if (isatty(STDIN_FILENO)) tcsetpgrp(STDIN_FILENO, getpgrp());
 }
 
+/**
+ * Comando interno "bg [%n | pgid]": reanuda en background un job detenido.
+ * Envia SIGCONT a todo el grupo de procesos sin ceder el terminal ni esperar.
+ * Sin argumento usa el job mas reciente.
+ */
 void comando_bg(char *tokens[]) {
     Job *job = buscar_job(tokens[1]);
     if (job == NULL) {
@@ -108,6 +131,7 @@ void comando_bg(char *tokens[]) {
     }
 
     if (kill(-job->pgid, SIGCONT) < 0) {
+        // ESRCH: el grupo ya no existe (el job termino); se limpia la lista.
         if (errno == ESRCH) {
             recolectar_jobs();
             return;

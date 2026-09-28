@@ -13,15 +13,24 @@
 
 
 Job jobs[MAX_JOBS]; //Arreglo de jobs
+// Bandera que el manejador de SIGCHLD levanta cuando llega la señal.
 volatile sig_atomic_t hay_hijos_terminados = 0;
 
 
 // Manejador de la señal SIGCHLD para indicar que hay hijos terminados.
+// Solo levanta la bandera; la recoleccion (waitpid) se hace en recolectar_jobs().
 void manejar_sigchld(int signal_number) {
     (void)signal_number;
     hay_hijos_terminados = 1;
 }
 
+/**
+ * Busca el job activo que contiene a un proceso.
+ *
+ * @param pid PID del proceso a buscar.
+ *
+ * @return Job* Puntero al job, o NULL si el PID no pertenece a ningun job activo.
+ */
 static Job *buscar_por_pid(pid_t pid) {
 
     for (int i = 0; i < MAX_JOBS; i++) {
@@ -41,6 +50,11 @@ static Job *buscar_por_pid(pid_t pid) {
     return NULL;
 }
 
+/**
+ * Obtiene la posicion de un proceso dentro de la lista de procesos de un job.
+ *
+ * @return int Indice en job->procesos, o -1 si el PID no pertenece al job.
+ */
 static int indice_proceso(Job *job, pid_t pid) {
 
     for (int i = 0; i < job->nprocesos; i++) {
@@ -53,6 +67,19 @@ static int indice_proceso(Job *job, pid_t pid) {
     return -1;
 }
 
+/**
+ * Registra un nuevo job en la primera posicion libre del arreglo de jobs e
+ * imprime su numero y PID de grupo (ej. "[1] 4821").
+ *
+ * @param pids Arreglo con los PIDs de los procesos del job (uno por comando).
+ * @param npids Cantidad de procesos (entre 1 y MAX_PIDS_POR_JOB).
+ * @param pgid ID del grupo de procesos del job.
+ * @param comando Texto de la linea de comando, para mostrarlo en jobs/pmon.
+ * @param detenido 1 si el job se registra ya detenido (Ctrl+Z), 0 si esta corriendo.
+ *
+ * @return int Indice del job en el arreglo; -1 si los parametros son invalidos
+ *             o se alcanzo el limite de MAX_JOBS.
+ */
 int registrar_job(const pid_t pids[], int npids, pid_t pgid, const char *comando, int detenido) {
     if (npids <= 0 || npids > MAX_PIDS_POR_JOB) {
         return -1;
@@ -84,6 +111,10 @@ int registrar_job(const pid_t pids[], int npids, pid_t pgid, const char *comando
     return -1;
 }
 
+/**
+ * Marca un job como completado, liberando su posicion en el arreglo de jobs
+ * para que pueda ser reutilizada por registrar_job.
+ */
 void marcar_job_completado(Job *job) {
     if (!job) {
         return;
@@ -95,6 +126,10 @@ void marcar_job_completado(Job *job) {
 }
 
 // Recolecta los jobs terminados y los elimina del arreglo de jobs.
+// Usa waitpid(-1, WNOHANG | WUNTRACED | WCONTINUED) en un ciclo para atender
+// todos los cambios de estado pendientes sin bloquear la shell: actualiza el
+// estado detenido/continuado de los jobs y, cuando terminan todos los procesos
+// de un job, imprime "[n]+ Done <comando>" y libera su lugar.
 void recolectar_jobs(void) {
     int status;
     pid_t pid;
@@ -133,10 +168,11 @@ void recolectar_jobs(void) {
     }
 
     if (pid < 0 && errno != ECHILD && errno != EINTR) {
+        // Otros errores de waitpid no se tratan: se ignoran.
     } 
 }
 
-// Obtiene el estado de un job a partir de su PID. 
+// Obtiene el estado (texto) de un job: Detenido, Ejecutando o Terminado.
 static const char *obtener_estado_job(const Job *job) {
     if (job->detenido) {
         return "Detenido";
@@ -150,6 +186,8 @@ static const char *obtener_estado_job(const Job *job) {
 }
 
 // Escribe en pantalla la lista de jobs activos.
+// Formato: [n] <estado> <pgid> <comando>. Antes de listar, actualiza el
+// estado de los jobs con recolectar_jobs().
 void listar_jobs(void) {
     recolectar_jobs();
 
@@ -162,6 +200,14 @@ void listar_jobs(void) {
     }
 }
 
+/**
+ * Busca un job a partir de un especificador, usado por fg y bg.
+ *
+ * @param especificador NULL o vacio: el job activo mas reciente (mayor numero);
+ *                      "%n": el job numero n; "n": el job cuyo PGID es n.
+ *
+ * @return Job* Puntero al job, o NULL si el especificador es invalido o no existe.
+ */
 Job *buscar_job(char *especificador) {
     recolectar_jobs();
 

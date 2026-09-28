@@ -9,6 +9,12 @@
 #include "shell.h"
 
 
+/**
+ * Restaura la disposicion por defecto de las señales de terminal en el hijo
+ * (la shell las ignora y esa disposicion se hereda tras fork). Asi Ctrl+C,
+ * Ctrl+\ y Ctrl+Z afectan al comando en foreground y no a la shell.
+ * Debe llamarse despues del fork() y antes de execvp().
+ */
 static void restaurar_senales_hijo(void) {
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
@@ -21,6 +27,17 @@ static void restaurar_senales_hijo(void) {
     sigaction(SIGTTOU, &sa, NULL);
 }
 
+/**
+ * Aplica las redirecciones de E/S (<, > y >>) indicadas en los tokens.
+ * Para cada operador hace open() del archivo, dup2() sobre stdin/stdout
+ * y close() del descriptor original. Se llama en el proceso hijo.
+ * Si hay varias redirecciones del mismo tipo, prevalece la ultima.
+ *
+ * @param tokens Arreglo de tokens terminado en NULL.
+ *
+ * @return int 0 si todas las redirecciones se aplicaron; -1 si falta el
+ *             archivo o falla open()/dup2() (el error se informa por stderr).
+ */
 static int aplicar_redirecciones(char *tokens[]) {
     for (int i = 0; tokens[i] != NULL; i++) {
         int destino = -1;
@@ -60,6 +77,17 @@ static int aplicar_redirecciones(char *tokens[]) {
     return 0;
 }
 
+/**
+ * Construye el argv para execvp a partir de los tokens, omitiendo los
+ * operadores de redireccion (<, >, >>) junto con el archivo que los sigue.
+ *
+ * @param tokens Arreglo de tokens terminado en NULL.
+ * @param argv Arreglo de salida, terminado en NULL.
+ * @param max_argv Capacidad de argv (incluye el NULL final).
+ *
+ * @return int Cantidad de argumentos; -1 si un operador no tiene archivo
+ *             o si hay demasiados argumentos.
+ */
 static int preparar_argv(char *tokens[], char *argv[], int max_argv) {
     int n = 0;
     for (int i = 0; tokens[i] != NULL; i++) {
@@ -77,9 +105,15 @@ static int preparar_argv(char *tokens[], char *argv[], int max_argv) {
 
 /**
  * Crea proceso hijo para ejecutar un comando externo mediante execvp.
- * El proceso padre espera a que el hijo termine su ejecucion antes de continuar.
+ * El hijo se coloca en su propio grupo de procesos, restaura las señales y
+ * aplica las redirecciones antes del exec.
+ * En foreground, el padre cede el terminal al hijo (tcsetpgrp) y espera a que
+ * termine o se detenga (Ctrl+Z; en ese caso se registra como job detenido).
+ * En background, el padre registra el job y retorna de inmediato.
  * 
  * @param tokens Arreglo de cadenas terminado en NULL. 
+ * @param background 1 si el comando se ejecuta en background, 0 si en foreground.
+ * @param comando Texto de la linea de comando, usado al registrar el job.
  */
 void ejecutar_comando(char *tokens[], int background, const char *comando) {
 
@@ -95,6 +129,7 @@ void ejecutar_comando(char *tokens[], int background, const char *comando) {
     //CODIGO DEL PROCESO HIJO
     if (pid == 0) {
 
+        // Nuevo grupo de procesos, para poder controlar el job como una unidad.
         setpgid(0, 0);
         restaurar_senales_hijo();
 
@@ -110,6 +145,8 @@ void ejecutar_comando(char *tokens[], int background, const char *comando) {
         _exit(127);
     }
 
+    // El padre tambien llama a setpgid para evitar una condicion de carrera
+    // con el hijo (el grupo debe existir antes de usar tcsetpgrp).
     setpgid(pid, pid);
     pid_t pids[1] = {pid};
 
@@ -118,12 +155,14 @@ void ejecutar_comando(char *tokens[], int background, const char *comando) {
         return;
     }
 
+    // Foreground: el hijo pasa a ser el grupo con control del terminal.
     if (isatty(STDIN_FILENO)) {
         tcsetpgrp(STDIN_FILENO, pid);
     }
 
     int status;
 
+    // WUNTRACED permite detectar que el hijo fue detenido (Ctrl+Z).
     while (waitpid(pid, &status, WUNTRACED) < 0 && errno == EINTR) {}
 
     if (WIFSTOPPED(status)) {
@@ -131,13 +170,28 @@ void ejecutar_comando(char *tokens[], int background, const char *comando) {
         printf("\n[Detenido] %d %s\n", pid, comando);
     }
 
+    // Devuelve el control del terminal a la shell.
     if (isatty(STDIN_FILENO)) tcsetpgrp(STDIN_FILENO, getpgrp());
 }
 
+/**
+ * Ejecuta una tuberia de N comandos (cmd1 | cmd2 | ... | cmdN).
+ * Cada comando corre en su propio proceso hijo, todos dentro de un mismo grupo
+ * de procesos (el del primer hijo). La salida de cada comando se conecta a la
+ * entrada del siguiente con pipe() + dup2(), y todos los descriptores de pipe
+ * sobrantes se cierran en hijos y padre. Cada comando admite redirecciones.
+ * En foreground espera a todos los procesos (o a que se detengan); en
+ * background registra el job y retorna.
+ *
+ * @param comandos_pipe Arreglo con el texto de cada comando de la tuberia.
+ * @param num_comandos Cantidad de comandos (maximo MAX_PIDS_POR_JOB).
+ * @param background 1 si la tuberia completa va en background, 0 si en foreground.
+ * @param comando Texto de la linea completa, usado al registrar el job.
+ */
 void ejecutar_pipes(char *comandos_pipe[], int num_comandos, int background, const char *comando) {
-    int in_fd = STDIN_FILENO;
+    int in_fd = STDIN_FILENO; // extremo de lectura del pipe anterior (entrada del proximo comando)
     pid_t pids[MAX_PIDS_POR_JOB];
-    pid_t pgid = 0;
+    pid_t pgid = 0; // grupo de procesos de la tuberia (0 hasta crear el primer hijo)
     int creados = 0;
 
     if (num_comandos <= 0 || num_comandos > MAX_PIDS_POR_JOB) {
@@ -162,6 +216,7 @@ void ejecutar_pipes(char *comandos_pipe[], int num_comandos, int background, con
 
         int pipefd[2] = {-1, -1};
 
+        // Se crea un pipe por cada comando excepto el ultimo.
         if (i < num_comandos - 1 && pipe(pipefd) < 0) {
             perror("pipe");
             goto error;
@@ -183,9 +238,11 @@ void ejecutar_pipes(char *comandos_pipe[], int num_comandos, int background, con
         if (pid == 0) {
             restaurar_senales_hijo();
 
+            // El primer hijo crea el grupo; los demas se unen a el.
             pid_t grupo = (pgid == 0) ? getpid() : pgid;
             setpgid(0, grupo);
 
+            // Entrada: extremo de lectura del pipe anterior.
             if (in_fd != STDIN_FILENO) {
 
                 if (dup2(in_fd, STDIN_FILENO) < 0) { 
@@ -193,6 +250,7 @@ void ejecutar_pipes(char *comandos_pipe[], int num_comandos, int background, con
                 }
             }
 
+            // Salida: extremo de escritura del pipe actual (si no es el ultimo).
             if (i < num_comandos - 1) {
 
                 if (dup2(pipefd[1], STDOUT_FILENO) < 0) { 
@@ -200,6 +258,7 @@ void ejecutar_pipes(char *comandos_pipe[], int num_comandos, int background, con
                 }
             }
 
+            // Cierra los descriptores originales de pipe, que ya no se necesitan.
             if (in_fd != STDIN_FILENO) {
                 close(in_fd);
             }
@@ -212,6 +271,7 @@ void ejecutar_pipes(char *comandos_pipe[], int num_comandos, int background, con
                 close(pipefd[1]);
             }
 
+            // Las redirecciones explicitas (<, >, >>) tienen prioridad sobre los pipes.
             if (aplicar_redirecciones(tokens) < 0) {
                 _exit(2);
             }
@@ -229,6 +289,8 @@ void ejecutar_pipes(char *comandos_pipe[], int num_comandos, int background, con
         
         setpgid(pid, pgid);
 
+        // El padre cierra los extremos que ya no usa para que los lectores
+        // reciban EOF: la lectura anterior y la escritura del pipe actual.
         if (in_fd != STDIN_FILENO) {
             close(in_fd);
         }
@@ -252,6 +314,7 @@ void ejecutar_pipes(char *comandos_pipe[], int num_comandos, int background, con
         tcsetpgrp(STDIN_FILENO, pgid);
     }
 
+    // Espera a todos los procesos del grupo (waitpid(-pgid)) o a que se detengan.
     int restantes = creados;
     int detenido = 0;
 
@@ -284,6 +347,8 @@ void ejecutar_pipes(char *comandos_pipe[], int num_comandos, int background, con
     if (isatty(STDIN_FILENO)) tcsetpgrp(STDIN_FILENO, getpgrp());
     return;
 
+// Manejo de errores: cierra el pipe pendiente, termina (SIGTERM) los hijos ya
+// creados y los recoge para no dejar procesos zombie.
 error:
     if (in_fd != STDIN_FILENO) {
         close(in_fd);
