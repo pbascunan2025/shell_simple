@@ -40,6 +40,8 @@ void ejecutar_pipes(char *comandos_pipe[], int num_comandos, int background, con
  
 //builtins.c
 void comando_cd(char *tokens[]);
+void comando_fg(char *tokens[]);
+void comando_bg(char *tokens[]);
  
 //pmon.c
 void pmon_run(int intervalo_segundo);

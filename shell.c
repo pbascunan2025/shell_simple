@@ -48,6 +48,9 @@ int main(void) {
 
     sigaction(SIGINT, &sa_ignore, NULL);
     sigaction(SIGQUIT, &sa_ignore, NULL);
+    sigaction(SIGTSTP, &sa_ignore, NULL); //ignorar ctrlz
+    sigaction(SIGTTIN, &sa_ignore, NULL); //ignorar lectura en background
+    sigaction(SIGTTOU, &sa_ignore, NULL);
 
     //Bucle principal de ejecucion de la Shell.
     while (1) {
@@ -147,7 +150,14 @@ int main(void) {
                 }
                 pmon_run(intervalo);
                 continue;
+            } else if (strcmp(tokens[0], "fg") == 0) {
+                comando_fg(tokens);
+                continue;
+            } else if (strcmp(tokens[0], "bg") == 0) {
+                comando_bg(tokens);
+                continue;
             }
+            
 
             ejecutar_comando(tokens, background, comando_copia);
             

@@ -26,10 +26,8 @@ void ejecutar_comando(char *tokens[], int background, const char *comando) {
     //CODIGO DEL PROCESO HIJO
     if (pid == 0) {
 
-        if (background) {
-            // Separa el job de background del grupo de procesos del terminal.
-            setpgid(0, 0);
-        } else {
+        setpgid(0, 0);
+
             struct sigaction sa_default;
             memset(&sa_default, 0, sizeof(sa_default));
             sa_default.sa_handler = SIG_DFL;
@@ -38,6 +36,13 @@ void ejecutar_comando(char *tokens[], int background, const char *comando) {
 
             sigaction(SIGINT, &sa_default, NULL);
             sigaction(SIGQUIT, &sa_default, NULL);
+            sigaction(SIGTSTP, &sa_default, NULL); 
+            sigaction(SIGTTIN, &sa_default, NULL);
+            sigaction(SIGTTOU, &sa_default, NULL);
+
+        if (!background) {
+            //solo si es foreground, toma el control de la terminal
+            tcsetpgrp(STDIN_FILENO, getpid());
         }
         
         int i = 0;
@@ -102,15 +107,27 @@ void ejecutar_comando(char *tokens[], int background, const char *comando) {
     }
 
     //CODIGO DEL PROCESO PADRE
+
+    setpgid(pid, pid);
+
     if (background) {
         registrar_job(pid, comando);
         return;
     }
 
+    tcsetpgrp(STDIN_FILENO, pid);
+
     int status;
 
-    //Bloquea la ejecucion del padre hasta que el hijo termine.
-    waitpid(pid, &status, 0);
+    waitpid(pid, &status, WUNTRACED);
+
+    if (WIFSTOPPED(status)) {
+        printf("\n[Detenido] %d %s\n", pid, comando);
+        registrar_job(pid, comando);
+    }
+
+    tcsetpgrp(STDIN_FILENO, getpgrp());
+
 }
 
 
@@ -145,10 +162,6 @@ void ejecutar_pipes(char *comandos_pipe[], int num_comandos, int background, con
         //Proceso de hijo
         if (pids[i] == 0) { 
             
-            if (background) {
-
-                setpgid(0, pgid_pipeline);
-            } else {
                 // Struct para restablecer las señales SIGINT y SIGQUIT a su comportamiento predeterminado
                 struct sigaction sa_default;
                 memset(&sa_default, 0, sizeof(sa_default));
@@ -158,6 +171,13 @@ void ejecutar_pipes(char *comandos_pipe[], int num_comandos, int background, con
 
                 sigaction(SIGINT, &sa_default, NULL);
                 sigaction(SIGQUIT, &sa_default, NULL);
+                sigaction(SIGTSTP, &sa_default, NULL); 
+                sigaction(SIGTTIN, &sa_default, NULL);
+                sigaction(SIGTTOU, &sa_default, NULL);
+            
+
+            if (background) {
+                setpgid(0, pgid_pipeline);
             }
 
             //Redirigir la ENTRADA
