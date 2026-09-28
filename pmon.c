@@ -8,6 +8,24 @@
 static volatile sig_atomic_t pmon_refrescar = 0;
 static volatile sig_atomic_t pmon_salir = 0;
 
+//struct temporal para ordenar los procesos en pmon
+typedef struct {
+    pid_t pid;
+    char comando[256];
+    const char *estado;
+    double cpu;
+    long rss;
+} PmonRow;
+
+//funcion para comparar dos procesos por %CPU (de mayor a menor)
+static int comparar_cpu(const void *a, const void *b) {
+    const PmonRow *rowA = (const PmonRow *)a;
+    const PmonRow *rowB = (const PmonRow *)b;
+    if (rowA->cpu < rowB->cpu) return 1;
+    if (rowA->cpu > rowB->cpu) return -1;
+    return 0;
+}
+
 static void pmon_manejar_alarma(int num_senal) {
 
     (void)num_senal;
@@ -91,6 +109,9 @@ static void dibujar_tabla(double intervalo_segundos) {
 
     printf("%-7s %-15s %-12s %-13s %-9s\n", "PID", "COMANDO", "ESTADO", "%CPU(aprox)", "RSS(KB)");
 
+    PmonRow filas[MAX_JOBS];
+    int count = 0;
+
     for (int i = 0; i < MAX_JOBS; i++) {
 
         if (!jobs[i].activo) {
@@ -123,8 +144,29 @@ static void dibujar_tabla(double intervalo_segundos) {
         jobs[i].pmon_ultimo_tiempo_sistema = tiempo_sistema;
         jobs[i].pmon_iniciado = 1;
 
-        printf("%-7d %-15s %-12s %-13.1f %-9ld\n", jobs[i].pid, jobs[i].comando, nombre_estado(estado), porcentaje_cpu, memoria_rss);
+        //guarda los datos en el array
+        filas[count].pid = jobs[i].pid;
+        strncpy(filas[count].comando, jobs[i].comando, sizeof(filas[count].comando));
+        filas[count].estado = nombre_estado(estado);
+        filas[count].cpu = porcentaje_cpu;
+        filas[count].rss = memoria_rss;
+        count++;
 
+    }
+
+    //ordena el array usando qsort y la funcion de comparar
+    qsort(filas, count, sizeof(PmonRow), comparar_cpu);
+
+    //imprime el arreglo ya ordenado
+    for (int k = 0; k < count; k++) {
+        //resalta el primer proceso si es que está consumiendo CPU
+        if (k == 0 && filas[k].cpu > 0.0) { 
+            printf("\033[1;32m%-7d %-15s %-12s %-13.1f %-9ld\033[0m\n", 
+                   filas[k].pid, filas[k].comando, filas[k].estado, filas[k].cpu, filas[k].rss);
+        } else {
+            printf("%-7d %-15s %-12s %-13.1f %-9ld\n", 
+                   filas[k].pid, filas[k].comando, filas[k].estado, filas[k].cpu, filas[k].rss);
+        }
     }
 
     fflush(stdout);   
