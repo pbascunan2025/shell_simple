@@ -73,6 +73,8 @@ int main(void) {
         linea[sizeof(linea) - 1] = '\0';
         free(input_line);
 
+        expandir_variables(linea);
+
         char linea_original[MAX_LINEAS];
         strncpy(linea_original, linea, sizeof(linea_original)- 1);
         linea_original[sizeof(linea_original) - 1] = '\0';
@@ -99,6 +101,14 @@ int main(void) {
             int ntokens = parse_line(comandos_pipe[0], tokens, MAX_TOKENS);
             //Si la linea esta vacia, se ignora.
             if (ntokens == 0) {
+                continue;
+            }
+
+            char *signo_igual = strchr(tokens[0], '=');
+            if (signo_igual != NULL && signo_igual != tokens[0]) {
+                *signo_igual = '\0';
+                char *valor = signo_igual + 1;
+                setenv(tokens[0], valor, 1);
                 continue;
             }
 

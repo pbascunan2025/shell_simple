@@ -23,6 +23,7 @@ typedef struct {
 //parser.c 
 int parse_line(char *line, char *tokens[], int max_tokens);
 int parse_pipes(char *line, char *comandos[], int max_comandos);
+void expandir_variables(char *linea);
  
 //jobs.c 
 extern Job jobs[MAX_JOBS];

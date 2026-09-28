@@ -1,5 +1,7 @@
 #include <string.h>
 #include "shell.h"
+#include <stdlib.h>
+#include <ctype.h>
 
 /**
  * Divide la cadena de entrada en tokens separados por espacios o tabulaciones.
@@ -60,4 +62,42 @@ int parse_pipes(char *line, char *comandos[], int max_comandos) {
     comandos[n_comandos] = NULL;
 
     return n_comandos;
+}
+
+void expandir_variables(char *linea) {
+    char buffer[MAX_LINEAS] = {0};
+    int i = 0, j = 0;
+
+    while (linea[i] != '\0') {
+        //si encuentra un $, intentamos expandir
+        if (linea[i] == '$') {
+            i++;
+            char nombre_var[256] = {0};
+            int k = 0;
+
+            //extrae el nombre de la variable (letras, numeros, guion bajo)
+            while (linea[i] != '\0' && (isalnum(linea[i]) || linea[i] == '_')) {
+                nombre_var[k++] = linea[i++];
+            }
+            nombre_var[k] = '\0';
+
+            //busca el valor en el entorno del sistema/shell
+            char *valor = getenv(nombre_var);
+            if (valor != NULL) {
+                int v = 0;
+                //copia el valor al buffer nuevo
+                while (valor[v] != '\0' && j < MAX_LINEAS - 1) {
+                    buffer[j++] = valor[v++];
+                }
+            }
+            //si getenv retorna NULL, la variable no existe
+        } else {
+            //si no es un $, copia la letra normal
+            buffer[j++] = linea[i++];
+        }
+    }
+    buffer[j] = '\0';
+    
+    //se sobrescribe la linea original con la version ya expandida
+    strcpy(linea, buffer);
 }
