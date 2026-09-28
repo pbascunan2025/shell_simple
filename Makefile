@@ -2,7 +2,7 @@ CC = gcc
 CFLAGS = -Wall -Wextra -std=gnu11
 LDFLAGS = -lreadline
 
-SRCS = shell.c parser.c exec.c jobs.c builtins.c pmon.c
+SRCS = mishell.c parser.c exec.c jobs.c builtins.c pmon.c
 OBJS = $(SRCS:.c=.o)
 
 mishell: $(OBJS)
